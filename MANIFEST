@@ -1,0 +1,13 @@
+Build.PL
+Changes
+MANIFEST
+README
+lib/POE/Component/IRC/Plugin/BaseWrap.pm
+t/00-load.t
+t/pod-coverage.t
+t/pod.t
+t/kwalitee.t
+examples/time_bot.pl
+examples/POE/Component/IRC/Plugin/Example.pm
+Makefile.PL
+META.yml
