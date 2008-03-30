@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.002';
+our $VERSION = '0.003';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -143,7 +143,16 @@ sub _do_response {
 
     my $event_response;
     if ( my $key = $self->_message_into_response_event ) {
-        $in_ref->{$key} = $response_message;
+        if ( ref $key eq 'ARRAY' ) {
+            $in_ref->{ $key->[0] } = $response_message;
+            %$in_ref = (
+                %$in_ref,
+                %{ $key->[1] },
+            );
+        }
+        else {
+            $in_ref->{ $key } = $response_message;
+        }
         $event_response = $in_ref;
     }
     else {
@@ -179,7 +188,6 @@ sub _do_response {
 }
 
 sub _message_into_response_event { undef; }
-
 
 1;
 
@@ -360,7 +368,15 @@ the C<_make_response_event()> sub. Basically, if you are defining
 C<_message_into_response_event()> sub you should not define
 C<_make_response_message()> sub as it will never be called.
 
-As an example, the following those snippets are equivalent:
+If along with the return value of C<_make_response_message()> you also
+want to add some extra keys into the C<$in_ref> you can return an
+I<arrayref> from C<_message_into_response_event()> sub with two elements.
+The first element of that arrayref would be the name of the key into
+which to stick the return value of C<_make_response_message()>. The second
+element must be a I<hashref> with extra keys/values which will be
+set in the C<$in_ref>; note that you can override original keys from here.
+
+As an example, the following two snippets are equivalent:
 
     sub _make_response_message {
         return "Right now it is " . localtime;
