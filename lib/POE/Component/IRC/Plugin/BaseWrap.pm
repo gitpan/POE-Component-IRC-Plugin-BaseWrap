@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.001';
+our $VERSION = '0.002';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -141,8 +141,17 @@ sub _do_response {
 
     my $response_message = $self->_make_response_message( $in_ref );
 
+    my $event_response;
+    if ( my $key = $self->_message_into_response_event ) {
+        $in_ref->{$key} = $response_message;
+        $event_response = $in_ref;
+    }
+    else {
+        $event_response = $self->_make_response_event( $in_ref );
+    }
+
     $self->{irc}->_send_event(
-        $self->{response_event} => $self->_make_response_event( $in_ref ),
+        $self->{response_event} => $event_response,
     );
 
     if ( $self->{auto} ) {
@@ -154,7 +163,10 @@ sub _do_response {
                 ? $in_ref->{channel}
                 : (split /!/, $in_ref->{who})[0];
 
-        for ( @$response_message ) {
+        for (
+            ref $response_message eq 'ARRAY' ? @$response_message
+            : ( $response_message )
+        ) {
             $poe_kernel->post( $self->{irc} =>
                 $response_type =>
                 $where =>
@@ -165,6 +177,9 @@ sub _do_response {
 
     undef;
 }
+
+sub _message_into_response_event { undef; }
+
 
 1;
 
@@ -227,7 +242,7 @@ functionality of this base class.
 In this document a word "plugin" refers to the POE::Component::IRC::Plugin
 which is to be using this base class.
 
-=head1 SUBS YOU NEED TO OVERRIDE
+=head1 SUBS YOU NEED TO/CAN OVERRIDE
 
 =head2 C<_make_default_args>
 
@@ -255,12 +270,15 @@ C<trigger> argument's default is C<qr/^basewrap\s+(?=\S)/i>
     sub _make_response_message {
         my ( $self, $in_ref ) = @_;
         my $nick = (split /!/, $in_ref->{who})[0];
-        return [ "$nick, time over here is: " . scalar localtime ];
+        return "$nick, time over here is: " . scalar localtime;
     }
 
-The C<_make_response_message> sub must return an arrayref. Each element
+The C<_make_response_message> sub must return either a scalar or an
+arrayref. If an arrayref is returned each element
 of that arrayref will be "spoken" by the plugin if C<auto> argument to
-the constructor is set to a true value. The C<@_> will contain plugin's
+the constructor is set to a true value. Returning is scalar is equivalent
+to returning an arrayref with only one element.
+The C<@_> will contain plugin's
 object as the first element (constructor's arguments, anyone?) and the
 second element will contain a hashref, keys/values of which are as follows:
 
@@ -315,8 +333,8 @@ The full message that the user has sent.
 The C<_make_response_event> sub is similiar to C<_make_response_message> sub
 except this one defines what the event handler listening to
 C<response_event> (see constructor's documentation in PLUGIN DOCUMENTATION
-section) event will recieve. The call to this sub looks like this
-basically:
+section) event will recieve, but see also C<_message_into_response_event()>
+below. The call to this sub looks like this basically:
 
     $self->{irc}->_send_event(
         $self->{response_event} => $self->_make_response_event( $in_ref ),
@@ -325,6 +343,42 @@ basically:
 The first element of C<@_> will be the plugin's object and the second
 element will be the same hashref as C<_make_response_message> sub recieves.
 See C<_make_response_message> sub above for more information.
+
+=head2 C<_message_into_response_event>
+
+    sub _message_into_response_event { 'name_of_key'; }
+
+While using previous version of this module I often found myself wishing
+to put the return value of C<_make_response_message()> as a certain key
+in C<$in_ref> of C<_make_response_event()> sub.. and didn't want to do
+whatever the plugin would be doing twice. Now this can be easily done.
+
+The C<_message_into_response_event> sub must return a true value which
+will be the name of the key which will contain the return value of
+C<_make_response_message()> sub and stuffed into C<$in_ref> hashref of
+the C<_make_response_event()> sub. Basically, if you are defining
+C<_message_into_response_event()> sub you should not define
+C<_make_response_message()> sub as it will never be called.
+
+As an example, the following those snippets are equivalent:
+
+    sub _make_response_message {
+        return "Right now it is " . localtime;
+    }
+
+    sub _make_response_event {
+        my ( $self, $in_ref ) = @_;
+        $in_ref->{time} = "Right now it is " . localtime;
+        return $in_ref;
+    }
+
+    # is the same as:
+
+    sub _make_response_message {
+        return "Right now it is " . localtime;
+    }
+
+    sub _message_into_response_event { 'time' }
 
 =head1 PLUGIN DOCUMENTATION
 
@@ -368,7 +422,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
         }
 
         sub irc_001 {
-            $_[KERNEL]->post( $_[SENDER] => join => '#zofbot' );
+            $irc->yield( join => '#zofbot' );
         }
 
         <Zoffix_> EXAMPLE, example example
@@ -384,7 +438,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
 
     =head1 CONSTRUCTOR
 
-    =head2 new
+    =head2 C<new>
 
         # plain and simple
         $irc->plugin_add(
@@ -413,7 +467,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     takes a few arguments, but I<all of them are optional>. The possible
     arguments/values are as follows:
 
-    =head3 auto
+    =head3 C<auto>
 
         ->new( auto => 0 );
 
@@ -426,7 +480,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     EMITED EVENTS section and C<response_event> argument for details).
     B<Defaults to:> C<1>.
 
-    =head3 response_event
+    =head3 C<response_event>
 
         ->new( response_event => 'event_name_to_recieve_results' );
 
@@ -434,7 +488,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     to emit when the results of the request are ready. See EMITED EVENTS
     section for more information. B<Defaults to:> C<irc_EXAMPLE>
 
-    =head3 banned
+    =head3 C<banned>
 
         ->new( banned => [ qr/aol\.com$/i ] );
 
@@ -443,7 +497,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     the regexes listed in the C<banned> arrayref, plugin will ignore the
     request. B<Defaults to:> C<[]> (no bans are set).
 
-    =head3 root
+    =head3 C<root>
 
         ->new( root => [ qr/\Qjust.me.and.my.friend.net\E$/i ] );
 
@@ -454,7 +508,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     specifying an empty arrayref to C<root> argument will restrict
     access to everyone.
 
-    =head3 trigger
+    =head3 C<trigger>
 
         ->new( trigger => qr/^EXAMPLE\s+(?=\S)/i );
 
@@ -465,7 +519,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     trigger doesn't match the actual data that needs to be processed.
     B<Defaults to:> C<qr/^EXAMPLE\s+(?=\S)/i>
 
-    =head3 addressed
+    =head3 C<addressed>
 
         ->new( addressed => 1 );
 
@@ -481,7 +535,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     in order to make a request. Note: this argument has no effect on
     C</notice> and C</msg> requests. B<Defaults to:> C<1>
 
-    =head3 listen_for_input
+    =head3 C<listen_for_input>
 
         ->new( listen_for_input => [ qw(public  notice  privmsg) ] );
 
@@ -498,7 +552,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     will enable functionality only via C</notice> and C</msg> messages.
     B<Defaults to:> C<[ qw(public  notice  privmsg) ]>
 
-    =head3 eat
+    =head3 C<eat>
 
         ->new( eat => 0 );
 
@@ -509,7 +563,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     documentation for more information if you are interested. B<Defaults to>:
     C<1>
 
-    =head3 debug
+    =head3 C<debug>
 
         ->new( debug => 1 );
 
@@ -520,7 +574,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
 
     =head1 EMITED EVENTS
 
-    =head2 response_event
+    =head2 C<response_event>
 
        EXAMPLE
 

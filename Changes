@@ -1,5 +1,10 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.002   Mar 30, 2008
+        Added C<_message_into_response_event()> sub
+        Made it so returning a scalar from C<_make_response_message()> would
+        equate to returning an arrayref with one element.
+
 0.001   Mar 10, 2008
         First version, released on an unsuspecting world.
 
