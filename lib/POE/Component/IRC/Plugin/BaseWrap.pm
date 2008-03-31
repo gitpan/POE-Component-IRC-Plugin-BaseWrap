@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.003';
+our $VERSION = '0.004';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -142,7 +142,7 @@ sub _do_response {
     my $response_message = $self->_make_response_message( $in_ref );
 
     my $event_response;
-    if ( my $key = $self->_message_into_response_event ) {
+    if ( my $key = $self->_message_into_response_event( $in_ref ) ) {
         if ( ref $key eq 'ARRAY' ) {
             $in_ref->{ $key->[0] } = $response_message;
             %$in_ref = (
@@ -375,6 +375,9 @@ The first element of that arrayref would be the name of the key into
 which to stick the return value of C<_make_response_message()>. The second
 element must be a I<hashref> with extra keys/values which will be
 set in the C<$in_ref>; note that you can override original keys from here.
+
+The C<@_> will contain your plugin's object as the first element and
+C<$in_ref> as a second element ( see C<_make_response_event()> )
 
 As an example, the following two snippets are equivalent:
 

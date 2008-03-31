@@ -1,5 +1,12 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.004   Mar 30, 2008
+        changed C<_message_into_response_event()> sub so it could add
+        more keys to the C<$in_ref> hashref.
+        fixed up the docs a bit
+
+0.003   Mar 30, 2008
+
 0.002   Mar 30, 2008
         Added C<_message_into_response_event()> sub
         Made it so returning a scalar from C<_make_response_message()> would
