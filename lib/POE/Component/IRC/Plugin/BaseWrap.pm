@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.004';
+our $VERSION = '0.005';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -273,6 +273,9 @@ are provided by default (as well as their default values). Exception
 being the C<response_event> argument default is C<irc_basewrap> and
 C<trigger> argument's default is C<qr/^basewrap\s+(?=\S)/i>
 
+B<Note:> user is able to change this arguments on the fly by accessing
+them as hashref keys in plugin's object.
+
 =head2 C<_make_response_message>
 
     sub _make_response_message {
@@ -483,8 +486,12 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     The C<new()> method constructs and returns a new
     C<POE::Component::IRC::Plugin::EXAMPLE> object suitable to be
     fed to L<POE::Component::IRC>'s C<plugin_add> method. The constructor
-    takes a few arguments, but I<all of them are optional>. The possible
-    arguments/values are as follows:
+    takes a few arguments, but I<all of them are optional>. B<Note:>
+    you can change the values of the arguments dynamically by accessing
+    them as hashref keys in your plugin's object; e.g. to ban some
+    user during runtime simply do
+    C<< push @{ $your_plugin_object->{banned} }, qr/user!mask/ >>
+    The possible arguments/values are as follows:
 
     =head3 C<auto>
 

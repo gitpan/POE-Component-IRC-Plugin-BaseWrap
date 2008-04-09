@@ -1,5 +1,9 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.005   Apr 8, 2008
+        fixed documentation to mention that constructor
+        arguments can be changed dynamically.
+
 0.004   Mar 30, 2008
         changed C<_message_into_response_event()> sub so it could add
         more keys to the C<$in_ref> hashref.
