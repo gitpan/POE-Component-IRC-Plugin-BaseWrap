@@ -8,7 +8,6 @@ use base 'POE::Component::IRC::Plugin::BaseWrap';
 
 sub _make_default_args {
     return (
-        trigger          => qr/^(?=time$)/i,
         response_event   => 'irc_time_response',
     );
 }

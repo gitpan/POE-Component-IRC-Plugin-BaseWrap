@@ -10,6 +10,7 @@ my $irc = POE::Component::IRC->spawn(
     server      => 'irc.freenode.net',
     port        => 6667,
     ircname     => 'Time bot',
+    plugin_debug => 1,
 );
 
 POE::Session->create(
@@ -25,7 +26,15 @@ sub _start {
 
     $irc->plugin_add(
         'Example' =>
-            POE::Component::IRC::Plugin::Example->new
+            POE::Component::IRC::Plugin::Example->new(
+                addressed => 0,
+                trigger => qr/^!time$/i,
+                triggers => {
+                    privmsg => qr/^time$/i,
+                    notice  => qr/^time$/i,
+                },
+                debug => 1,
+            )
     );
 
     $irc->yield( connect => {} );

@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.005';
+our $VERSION = '0.006';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -24,7 +24,6 @@ sub new {
         banned           => [],
         addressed        => 1,
         eat              => 1,
-        trigger          => qr/^basewrap\s+(?=\S)/i,
         listen_for_input => [ qw(public notice privmsg) ],
 
         $self->_make_default_args,
@@ -35,6 +34,17 @@ sub new {
     $args{listen_for_input} = {
         map { $_ => 1 } @{ $args{listen_for_input} || [] }
     };
+
+    for ( keys %{ $args{triggers} } ) {
+        if ( $_ ne 'public' and $_ ne 'notice' and $_ ne 'privmsg' ) {
+            croak "Invalid key [$_] in {triggers}, must be either"
+                . " 'public', 'privmsg' or 'notice'";
+        }
+    }
+
+    if ( not exists $args{trigger} and ref $args{triggers} ne 'HASH' ) {
+        croak "Neither 'trigger' nor 'triggers' arguments were specified";
+    }
     
     $self->{ $_ } = delete $args{ $_ } for keys %args;
     
@@ -103,13 +113,19 @@ sub _parse_input {
     }
 
     return PCI_EAT_NONE
-        unless defined $what and $what =~ s/$self->{trigger}//;
-
-    $what =~ s/^\s+|\s+$//;
+        unless defined $what;
 
     return PCI_EAT_NONE
-            unless length $what;
-
+        unless (
+            ( exists $self->{triggers}{ $type }
+                and $what =~ s/$self->{triggers}{$type}//
+            )
+            or
+            ( exists $self->{trigger} and $what =~ s/$self->{trigger}// )
+    );
+    
+    $what =~ s/^\s+|\s+$//g;
+    
     warn "Matched trigger: [ who => $who, channel => $channel, "
             . "what => $what ]"
         if $self->{debug};
@@ -477,6 +493,11 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
                     root             => [ qr/mah.net$/i ],
                     addressed        => 1,
                     trigger          => qr/^EXAMPLE\s+(?=\S)/i,
+                    triggers         => {
+                        public  => qr/^EXAMPLE\s+(?=\S)/i,
+                        notice  => qr/^EXAMPLE\s+(?=\S)/i,
+                        privmsg => qr/^EXAMPLE\s+(?=\S)/i,
+                    },
                     listen_for_input => [ qw(public notice privmsg) ],
                     eat              => 1,
                     debug            => 0,
@@ -539,8 +560,33 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
         ->new( trigger => qr/^EXAMPLE\s+(?=\S)/i );
 
     B<Optional>. Takes a regex as an argument. Messages matching this
-    regex will be considered as requests. See also
-    B<addressed> option below which is enabled by default. B<Note:> the
+    regex, irrelevant of the type of the message, will be considered as requests. See also
+    B<addressed> option below which is enabled by default as well as
+    B<trigggers> option which is more specific. B<Note:> the
+    trigger will be B<removed> from the message, therefore make sure your
+    trigger doesn't match the actual data that needs to be processed.
+    B<Defaults to:> C<qr/^EXAMPLE\s+(?=\S)/i>
+
+    =head3 C<triggers>
+
+        ->new( triggers => {
+                public  => qr/^EXAMPLE\s+(?=\S)/i,
+                notice  => qr/^EXAMPLE\s+(?=\S)/i,
+                privmsg => qr/^EXAMPLE\s+(?=\S)/i,
+            }
+        );
+
+    B<Optional>. Takes a hashref as an argument which may contain either
+    one or all of keys B<public>, B<notice> and B<privmsg> which indicates
+    the type of messages: channel messages, notices and private messages
+    respectively. The values of those keys are regexes of the same format and
+    meaning as for the C<trigger> argument (see above). 
+    Messages matching this
+    regex will be considered as requests. The difference is that only messages of type corresponding to the key of C<triggers> hashref
+    are checked for the trigger. B<Note:> the C<trigger> will be matched
+    irrelevant of the setting in C<triggers>, thus you can have one global and specific "local" triggers. See also
+    B<addressed> option below which is enabled by default as well as
+    B<trigggers> option which is more specific. B<Note:> the
     trigger will be B<removed> from the message, therefore make sure your
     trigger doesn't match the actual data that needs to be processed.
     B<Defaults to:> C<qr/^EXAMPLE\s+(?=\S)/i>

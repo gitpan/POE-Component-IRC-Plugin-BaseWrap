@@ -1,23 +1,16 @@
----
-name: POE-Component-IRC-Plugin-BaseWrap
-version: 0.005
-author:
-  - 'Zoffix Znet <zoffix@cpan.org>'
-abstract: base class for IRC plugins which need triggers/ban/root control
-license: perl
-resources:
-  license: http://dev.perl.org/licenses/
-requires:
-  Carp: 1.04
-  POE: 0.9999
-  POE::Component::IRC::Plugin: 0.1
-build_requires:
-  Test::More: 0
-provides:
-  POE::Component::IRC::Plugin::BaseWrap:
-    file: lib/POE/Component/IRC/Plugin/BaseWrap.pm
-    version: 0.005
-generated_by: Module::Build version 0.2808
+--- #YAML:1.0
+name:                POE-Component-IRC-Plugin-BaseWrap
+version:             0.006
+abstract:            ~
+license:             ~
+author:              ~
+generated_by:        ExtUtils::MakeMaker version 6.42
+distribution_type:   module
+requires:     
+    Carp:                          1.04
+    POE:                           0.9999
+    POE::Component::IRC::Plugin:   0.1
+    Test::More:                    0
 meta-spec:
-  url: http://module-build.sourceforge.net/META-spec-v1.2.html
-  version: 1.2
+    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
+    version: 1.3
