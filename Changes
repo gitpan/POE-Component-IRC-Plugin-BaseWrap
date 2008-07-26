@@ -1,5 +1,11 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.007   Jul 26, 2008
+	fixed an issue with META.yml file. No code changes
+
+0.006   Jul 14, 2008
+	added separate triggers functionality for "public", "notice" and "privmsg"
+
 0.005   Apr 8, 2008
         fixed documentation to mention that constructor
         arguments can be changed dynamically.
