@@ -1,5 +1,8 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.008   October 14, 2008
+        Minor changes to the "Documentation For Your Plugin" section of documentation
+
 0.007   Jul 26, 2008
 	fixed an issue with META.yml file. No code changes
 

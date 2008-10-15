@@ -1,6 +1,6 @@
 ---
 name: POE-Component-IRC-Plugin-BaseWrap
-version: 0.007
+version: 0.008
 author:
   - 'Zoffix Znet <zoffix@cpan.org>'
 abstract: base class for IRC plugins which need triggers/ban/root control
@@ -16,7 +16,7 @@ build_requires:
 provides:
   POE::Component::IRC::Plugin::BaseWrap:
     file: lib/POE/Component/IRC/Plugin/BaseWrap.pm
-    version: 0.007
+    version: 0.008
 generated_by: Module::Build version 0.2808
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

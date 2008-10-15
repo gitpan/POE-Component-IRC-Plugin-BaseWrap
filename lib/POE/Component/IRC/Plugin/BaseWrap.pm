@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.007';
+our $VERSION = '0.008';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -653,14 +653,45 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     The event handler set up to handle the event, name of which you've
     specified in the C<response_event> argument to the constructor
     (it defaults to C<irc_EXAMPLE>) will recieve input
-    every time request is completed. The input will come in EXAMPLE.
-    The EXAMPLE as follows:
+    every time request is completed. The input will come in C<$_[ARG0]>
+    on a form of a hashref.
+    The possible keys/values of that hashrefs are as follows:
 
-    EXAMPLE
-    EXAMPLE
-    EXAMPLE
-    EXAMPLE
-    EXAMPLE
+    =head3 C<EXAMPLE>
+
+    =head3 C<who>
+
+        { 'who' => 'Zoffix!Zoffix@i.love.debian.org', }
+
+    The C<who> key will contain the user mask of the user who sent the request.
+
+    =head3 C<what>
+
+        { 'what' => 'EXAMPLE', }
+
+    The C<what> key will contain user's message after stripping the C<trigger>
+    (see CONSTRUCTOR).
+
+    =head3 C<message>
+
+        { 'message' => 'EXAMPLE' }
+
+    The C<message> key will contain the actual message which the user sent; that
+    is before the trigger is stripped.
+
+    =head3 C<type>
+
+        { 'type' => 'public', }
+
+    The C<type> key will contain the "type" of the message the user have sent.
+    This will be either C<public>, C<privmsg> or C<notice>.
+
+    =head3 C<channel>
+
+        { 'channel' => '#zofbot', }
+
+    The C<channel> key will contain the name of the channel where the message
+    originated. This will only make sense if C<type> key contains C<public>.
 
 =head1 EXAMPLES
 
