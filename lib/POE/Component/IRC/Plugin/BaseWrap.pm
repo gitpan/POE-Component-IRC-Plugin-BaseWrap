@@ -3,7 +3,7 @@ package POE::Component::IRC::Plugin::BaseWrap;
 use warnings;
 use strict;
 
-our $VERSION = '0.008';
+our $VERSION = '0.009';
 use Carp;
 use POE;
 use POE::Component::IRC::Plugin qw(:ALL);
@@ -24,12 +24,21 @@ sub new {
         banned           => [],
         addressed        => 1,
         eat              => 1,
+        response_types   => {
+            public      => 'public',
+            privmsg     => 'privmsg',
+            notice      => 'notice',
+        },
         listen_for_input => [ qw(public notice privmsg) ],
 
         $self->_make_default_args,
 
         %args,
     );
+
+    $args{response_types}{public}  ||= 'public';
+    $args{response_types}{privmsg} ||= 'privmsg';
+    $args{response_types}{notice}  ||= 'notice';
 
     $args{listen_for_input} = {
         map { $_ => 1 } @{ $args{listen_for_input} || [] }
@@ -175,11 +184,13 @@ sub _do_response {
         $event_response = $self->_make_response_event( $in_ref );
     }
 
-    $self->{irc}->_send_event(
+    $self->{irc}->send_event(
         $self->{response_event} => $event_response,
     );
 
     if ( $self->{auto} ) {
+        $in_ref->{type} = $self->{response_types}{ $in_ref->{type} };
+    
         my $response_type = $in_ref->{type} eq 'public'
                         ? 'privmsg'
                         : $in_ref->{type};
@@ -363,7 +374,7 @@ C<response_event> (see constructor's documentation in PLUGIN DOCUMENTATION
 section) event will recieve, but see also C<_message_into_response_event()>
 below. The call to this sub looks like this basically:
 
-    $self->{irc}->_send_event(
+    $self->{irc}->send_event(
         $self->{response_event} => $self->_make_response_event( $in_ref ),
     );
 
@@ -498,6 +509,11 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
                         notice  => qr/^EXAMPLE\s+(?=\S)/i,
                         privmsg => qr/^EXAMPLE\s+(?=\S)/i,
                     },
+                    response_types   => {
+                        public      => 'public',
+                        privmsg     => 'privmsg',
+                        notice      => 'notice',
+                    },
                     listen_for_input => [ qw(public notice privmsg) ],
                     eat              => 1,
                     debug            => 0,
@@ -590,6 +606,29 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     trigger will be B<removed> from the message, therefore make sure your
     trigger doesn't match the actual data that needs to be processed.
     B<Defaults to:> C<qr/^EXAMPLE\s+(?=\S)/i>
+
+    =head3 C<response_types>
+
+        ->new(
+            response_types   => {
+                public      => 'public',
+                privmsg     => 'privmsg',
+                notice      => 'notice',
+            },
+        )
+
+    B<Optional>. Takes a hashref with one, two or three keys as a value. Valid keys are C<public>,
+    C<privmsg> and C<notice> that correspond to messages sent from a channel, via a private message or
+    via a notice respectively. When plugin is set to auto-respond (it's the default) using this hashref
+    you can control the response type based on where the message came from. The valid values of the
+    keys are the same as the names of the keys. The B<default> is presented above - messages are sent the same way they came. If for example, you wish to respond to private messages with notices instead,
+    simply set C<privmsg> key to value C<notice>:
+
+        ->new(
+            response_types   => {
+                privmsg     => 'notice',
+            },
+        )
 
     =head3 C<addressed>
 

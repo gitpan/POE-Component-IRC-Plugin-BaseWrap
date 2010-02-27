@@ -1,5 +1,9 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
+0.009   October 14, 2008
+        Changed _send_event() to send_event().
+        Added `response_types`
+
 0.008   October 14, 2008
         Minor changes to the "Documentation For Your Plugin" section of documentation
 
