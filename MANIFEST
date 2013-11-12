@@ -2,12 +2,14 @@ Build.PL
 Changes
 MANIFEST
 README
+LICENSE
 lib/POE/Component/IRC/Plugin/BaseWrap.pm
 t/00-load.t
-t/pod-coverage.t
-t/pod.t
-t/kwalitee.t
+xt/pod-coverage.t
+xt/pod.t
+xt/kwalitee.t
 examples/time_bot.pl
 examples/POE/Component/IRC/Plugin/Example.pm
 Makefile.PL
 META.yml
+META.json
