@@ -3,7 +3,9 @@ package POE::Component::IRC::Plugin::Example;
 use strict;
 use warnings;
 
-use lib '../lib';
+# VERSION
+
+use lib qw{lib ../lib};
 use base 'POE::Component::IRC::Plugin::BaseWrap';
 
 sub _make_default_args {

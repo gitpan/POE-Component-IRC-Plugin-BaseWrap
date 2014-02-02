@@ -1,4 +1,4 @@
-package POE::Component::IRC::Plugin::BaseWrap;
+package POE::Component::IRC::Plugin::BasePoCoWrap;
 
 use warnings;
 use strict;
@@ -16,49 +16,45 @@ sub new {
     my %args = @_;
     $args{ lc $_ } = delete $args{ $_ } for keys %args;
 
-    my $self = bless {}, $package;
     # fill in the defaults
+    my $self = bless {}, $package;
     %args = (
         debug            => 0,
         auto             => 1,
-        response_event   => 'irc_basewrap',
+        response_event   => 'irc_poco_wrap_response',
         banned           => [],
         addressed        => 1,
         eat              => 1,
+        trigger          => qr/^poco_wrap\s+(?=\S)/i,
+        listen_for_input => [ qw(public notice privmsg) ],
         response_types   => {
             public      => 'public',
             privmsg     => 'privmsg',
             notice      => 'notice',
         },
-        listen_for_input => [ qw(public notice privmsg) ],
 
-        $self->_make_default_args,
+        $self->_make_default_args(),
 
         %args,
     );
-
-    $args{response_types}{public}  ||= 'public';
-    $args{response_types}{privmsg} ||= 'privmsg';
-    $args{response_types}{notice}  ||= 'notice';
 
     $args{listen_for_input} = {
         map { $_ => 1 } @{ $args{listen_for_input} || [] }
     };
 
-    for ( keys %{ $args{triggers} } ) {
-        if ( $_ ne 'public' and $_ ne 'notice' and $_ ne 'privmsg' ) {
-            croak "Invalid key [$_] in {triggers}, must be either"
-                . " 'public', 'privmsg' or 'notice'";
-        }
-    }
-
-    if ( not exists $args{trigger} and ref $args{triggers} ne 'HASH' ) {
-        croak "Neither 'trigger' nor 'triggers' arguments were specified";
-    }
-
     $self->{ $_ } = delete $args{ $_ } for keys %args;
 
     return $self;
+}
+
+sub _start {
+    my ( $kernel, $self ) = @_[ KERNEL, OBJECT ];
+    $self->{_session_id} = $_[SESSION]->ID();
+    $kernel->refcount_increment( $self->{_session_id}, __PACKAGE__ );
+
+    $self->{poco} = $self->_make_poco;
+
+    undef;
 }
 
 sub PCI_register {
@@ -68,11 +64,35 @@ sub PCI_register {
 
     $irc->plugin_register( $self, 'SERVER', qw(public notice msg) );
 
+    $self->{_session_id} = POE::Session->create(
+        object_states => [
+            $self => [
+                qw(
+                    _start
+                    _shutdown
+                    _poco_done
+                    _poco_begin
+                )
+            ],
+        ],
+    )->ID;
+
     return 1;
+}
+
+sub _shutdown {
+    my ($kernel, $self) = @_[ KERNEL, OBJECT ];
+    $self->{poco}->shutdown;
+    $kernel->alarm_remove_all();
+    $kernel->refcount_decrement( $self->{_session_id}, __PACKAGE__ );
+    undef;
 }
 
 sub PCI_unregister {
     my $self = shift;
+
+    # Plugin is dying make sure our POE session does as well.
+    $poe_kernel->call( $self->{_session_id} => '_shutdown' );
 
     delete $self->{irc};
 
@@ -140,32 +160,33 @@ sub _parse_input {
             . "what => $what ]"
         if $self->{debug};
 
-    if ( exists $self->{root} ) {
-        return PCI_EAT_NONE
-            unless grep { $who =~ /$_/ } @{ $self->{root} || [] };
-    }
-
     foreach my $ban_re ( @{ $self->{banned} || [] } ) {
         return PCI_EAT_NONE
             if $who =~ /$ban_re/;
     }
 
-    $self->_do_response( {
-            what       => $what,
-            who        => $who,
-            channel    => $channel,
-            message    => $message,
-            type       => $type,
-        }
+    $poe_kernel->post( $self->{_session_id} => _poco_begin => {
+                what    => $what,
+                who     => $who,
+                channel => $channel,
+                message => $message,
+                type    => $type,
+            }
     );
 
     return $self->{eat} ? PCI_EAT_ALL : PCI_EAT_NONE;
 }
 
-sub _do_response {
-    my ( $self, $in_ref ) = @_;
+sub _poco_begin {
+    my ( $self, $args_ref ) = @_[OBJECT, ARG0];
+    $self->_make_poco_call( $args_ref );
+}
 
-    my $response_message = $self->_make_response_message( $in_ref );
+sub _poco_done {
+    my ( $kernel, $self, $in_ref ) = @_[ KERNEL, OBJECT, ARG0 ];
+
+    my $response_message
+    = $self->_make_response_message( @_[ARG0 .. $#_] );
 
     my $event_response;
     if ( my $key = $self->_message_into_response_event( $in_ref ) ) {
@@ -185,26 +206,26 @@ sub _do_response {
         $event_response = $self->_make_response_event( $in_ref );
     }
 
+    $response_message = [ $response_message ]
+        unless ref $response_message eq 'ARRAY';
+
     $self->{irc}->send_event(
         $self->{response_event} => $event_response,
     );
 
     if ( $self->{auto} ) {
-        $in_ref->{type} = $self->{response_types}{ $in_ref->{type} };
+        $in_ref->{_type} = $self->{response_types}{ $in_ref->{_type} };
 
-        my $response_type = $in_ref->{type} eq 'public'
+        my $response_type = $in_ref->{_type} eq 'public'
                         ? 'privmsg'
-                        : $in_ref->{type};
+                        : $in_ref->{_type};
 
-        my $where = $in_ref->{type} eq 'public'
-                ? $in_ref->{channel}
-                : (split /!/, $in_ref->{who})[0];
+        my $where = $in_ref->{_type} eq 'public'
+                ? $in_ref->{_channel}
+                : (split /!/, $in_ref->{_who})[0];
 
-        for (
-            ref $response_message eq 'ARRAY' ? @$response_message
-            : ( $response_message )
-        ) {
-            $poe_kernel->post( $self->{irc} =>
+        for ( @$response_message ) {
+            $kernel->post( $self->{irc} =>
                 $response_type =>
                 $where =>
                 $_
@@ -218,179 +239,260 @@ sub _do_response {
 sub _message_into_response_event { undef; }
 
 1;
-
 __END__
 
 =encoding utf8
 
-=for stopwords PoCo bot usermask
+=for stopwords PoCo RTFS bot usermask
 
 =head1 NAME
 
-POE::Component::IRC::Plugin::BaseWrap - base class for IRC plugins which need triggers/ban/root control
+POE::Component::IRC::Plugin::BasePoCoWrap - base talking/ban/trigger
+functionality for plugins using POE::Component::*
 
 =head1 SYNOPSIS
 
-    package POE::Component::IRC::Plugin::Example;
+    package POE::Component::IRC::Plugin::WrapExample;
 
     use strict;
     use warnings;
 
-    use base 'POE::Component::IRC::Plugin::BaseWrap';
+    use base 'POE::Component::IRC::Plugin::BasePoCoWrap';
+    use POE::Component::WWW::Google::Calculator;
 
     sub _make_default_args {
         return (
-            trigger          => qr/^(?=time$)/i,
-            response_event   => 'irc_time_response',
+            response_event   => 'irc_google_calc',
+            trigger          => qr/^calc\s+(?=\S)/i,
+        );
+    }
+
+    sub _make_poco {
+        return POE::Component::WWW::Google::Calculator->spawn(
+            debug => shift->{debug},
         );
     }
 
     sub _make_response_message {
-        my ( $self, $in_ref ) = @_;
-        my $nick = (split /!/, $in_ref->{who})[0];
-        return [ "$nick, time over here is: " . scalar localtime ];
+        my $self   = shift;
+        my $in_ref = shift;
+        return [ exists $in_ref->{error} ? $in_ref->{error} : $in_ref->{out} ];
     }
 
     sub _make_response_event {
-        my ( $self, $in_ref ) = @_;
-        $in_ref->{time} = localtime;
-        return $in_ref;
+        my $self = shift;
+        my $in_ref = shift;
+
+        return +{
+            ( exists $in_ref->{error}
+                ? ( error => $in_ref->{error} )
+                : ( result => $in_ref->{out} )
+            ),
+
+            map +( $_ => $in_ref->{"_$_"} ),
+                qw( who channel  message  type )
+        }
+    }
+
+    sub _make_poco_call {
+        my $self = shift;
+        my $data_ref = shift;
+
+        $self->{poco}->calc( {
+                event       => '_poco_done',
+                term        => delete $data_ref->{what},
+                map +( "_$_" => $data_ref->{$_} ),
+                    keys %$data_ref,
+            }
+        );
     }
 
     1;
     __END__
 
+=head1 NON PoCo FLAVOR
 
-    <Zoffix> TimeBot, time
-    <TimeBot> Zoffix, time over here is: Mon Mar 10 18:12:15 2008
-
-=head1 PoCo FLAVOR
-
-This distribution also contains L<POE::Component::IRC::Plugin::BasePoCoWrap>
-module, for wrapping L<POE::Component> stuff.
+This distribution also contains L<POE::Component::IRC::Plugin::BaseWrap>
+module, for wrapping non-PoCo stuff.
 
 =head1 DESCRIPTION
 
-The module is a base class which provides features such as limiting user
-access to the plugin (banned/root), triggering on matching trigger. The
-module provides listening to requests in public channels as well as /notice
-and /msg messages.
+The module is a base class to use for plugins which use a
+POE::Component::* object internally.
+It provides: triggering with a trigger, listening for requests in
+public channels, /notice and /msg (with ability to configure which exactly)
+as well as auto-responding to those requests.
+It provides "banned" feature which allows you to ignore certain people
+if their usermask matches a regex.
+
+I am not sure how flexible this base wrapper can get, just give it a try.
+Suggestions for improvements/whishlists are more than welcome.
 
 =head1 FORMAT OF THIS DOCUMENT
 
-This document contains a section at the end titled "PLUGIN DOCUMENTATION"
-which you can copy/paste into your module when using this base class
-to describe any functionality that this plugin offers. It is B<recommended>
-that you read that documentation B<first> as to know in details the
-functionality of this base class.
+This document uses word "plugin" to refer to the plugin which uses this
+base class.
 
-In this document a word "plugin" refers to the POE::Component::IRC::Plugin
-which is to be using this base class.
+Of course, by providing more functionality you need to document it.
+At the end of this document you will find a POD snippet which you can
+simply copy/paste into your plugin's docs. B<I recommend> that you read
+that snippet first as to understand what functionality this base class
+provides.
 
-=head1 SUBS YOU NEED TO/CAN OVERRIDE
+=head1 SUBS YOU NEED TO OVERRIDE
 
 =head2 C<_make_default_args>
 
     sub _make_default_args {
         return (
-            trigger          => qr/^(?=time$)/i,
-            response_event   => 'irc_time_response',
+            response_event   => 'irc_google_calc',
+            trigger          => qr/^calc\s+(?=\S)/i,
         );
     }
 
-The C<_make_default_args> sub must return a list of key/value pairs which
-represent the default arguments of the plugin's constructor (C<new()>
-method). Whatever you specify here may be overridden by giving
-plugin's constructor same-named arguments. Whatever you specify here
-will be available in C<_make_response_message> and C<_make_response_event>
-as a key in plugin's object. In other words, the trigger is available
-as C<$self-E<gt>{trigger}> (C<$self> being passed in C<$_[0]>). Refer
-to L<PLUGIN DOCUMENTATION> section for information on which arguments
-are provided by default (as well as their default values). Exception
-being the C<response_event> argument default is C<irc_basewrap> and
-C<trigger> argument's default is C<qr/^basewrap\s+(?=\S)/i>
+This sub must return a list of key/value arguments which you need to
+override. What you specify here will be possible to override by the user
+from the C<new()> method of the plugin.
 
-B<Note:> user is able to change this arguments on the fly by accessing
-them as hashref keys in plugin's object.
+A (sane) plugin would return a C<response_event> and C<trigger> arguments
+from this sub. There are some mandatory, or I shall rather say "reserved"
+arguments (they have defaults) which you can return from this sub which
+are as follows. On the left are the argument name, on the right is the
+default value it will take if you don't return it from the
+C<_make_default_args> sub:
+
+        debug            => 0,
+        auto             => 1,
+        response_event   => 'irc_poco_wrap_response',
+        banned           => [],
+        addressed        => 1,
+        eat              => 1,
+        trigger          => qr/^poco_wrap\s+(?=\S)/i,
+        listen_for_input => [ qw(public notice privmsg) ],
+
+Read the L<PLUGIN DOCUMENTATION> section to understand what each of
+these do.
+
+=head2 C<_make_poco>
+
+    sub _make_poco {
+        return POE::Component::WWW::Google::Calculator->spawn(
+            debug => shift->{debug},
+        );
+    }
+
+This sub must return your POE::Component::* object. The arguments which
+are available to the user in the C<new()> method of the plugin
+(i.e. the ones which you returned from C<_make_default_args> and the
+default ones) will be available as hash keys in the first element of C<@_>
+which is also your plugin's object.
+
+=head2 C<_make_poco_call>
+
+    sub _make_poco_call {
+        my $self = shift;
+        my $data_ref = shift;
+
+        $self->{poco}->calc( {
+                event       => '_poco_done',
+                term        => delete $data_ref->{what},
+                map +( "_$_" => $data_ref->{$_} ),
+                    keys %$data_ref,
+            }
+        );
+    }
+
+In this sub you would make a call to your POE::Component::* object
+asking for some data. After the plugin returns the calls to
+C<_make_response_message> and C<_make_response_event> will be made
+and C<@_[ARG0 .. $#_ ]> will contain whatever your PoCo returns.
+
+B<NOTE:> your PoCo must send the response to an event named C<_poco_done>
+otherwise you'll have to override more methods which is left as an exercise.
+(RTFS! :) )
+
+The first element of C<@_> in C<_make_poco_call> sub will contain plugin's
+object, the second element will contain a hashref with the following
+keys/values:
+
+    $VAR1 = {
+        'who' => 'Zoffix__!n=Zoffix@unaffiliated/zoffix',
+        'what' => 'http://zoffix.com',
+        'type' => 'public',
+        'channel' => '#zofbot',
+        'message' => 'CalcBot, rank http://zoffix.com'
+    };
+
+=over 10
+
+=item C<who>
+
+The mask of the other who triggered the request
+
+=item C<what>
+
+The input after stripping the trigger (note, leading/trailing white-space
+is stripped as well)
+
+=item C<type>
+
+This will be either C<public>, C<privmsg> or C<notice> and will indicate
+where the message came from.
+
+=item C<channel>
+
+This will be the channel name if the request came from a public channel
+
+=item C<message>
+
+This will be the full message of the user who triggered the request.
+
+=back
 
 =head2 C<_make_response_message>
 
     sub _make_response_message {
-        my ( $self, $in_ref ) = @_;
-        my $nick = (split /!/, $in_ref->{who})[0];
-        return "$nick, time over here is: " . scalar localtime;
+        my $self   = shift;
+        my $in_ref = shift;
+        return [ exists $in_ref->{error} ? $in_ref->{error} : $in_ref->{out} ];
     }
 
-The C<_make_response_message> sub must return either a scalar or an
-arrayref. If an arrayref is returned each element
-of that arrayref will be "spoken" by the plugin if C<auto> argument to
-the constructor is set to a true value. Returning is scalar is equivalent
-to returning an arrayref with only one element.
-The C<@_> will contain plugin's
-object as the first element (constructor's arguments, anyone?) and the
-second element will contain a hashref, keys/values of which are as follows:
-
-    $VAR1 = {
-        'who' => 'Zoffix!n=Zoffix@unaffiliated/zoffix',
-        'what' => 'time',
-        'type' => 'public',
-        'channel' => '#zofbot',
-        'message' => 'TimeBot, time'
-    };
-
-=head3 who
-
-    { 'who' => 'Zoffix!n=Zoffix@unaffiliated/zoffix' }
-
-The usermask of the person who made the request.
-
-=head3 what
-
-    { 'what' => 'time' }
-
-The user's message after stripping the trigger.
-
-=head3 type
-
-    { 'type' => 'public' }
-
-The type of the request. This will be either C<public>, C<notice> or
-C<privmsg>
-
-=head3 channel
-
-    { 'channel' => '#zofbot' }
-
-The channel where the message came from (this will only make sense when
-the request came from a public channel as opposed to /notice or /msg)
-
-=head3 message
-
-    { 'message' => 'TimeBot, time' }
-
-The full message that the user has sent.
+This sub must return an arrayref or a single string. If a string is returned then it
+is almost the same as returning an arrayref with just that string in it; by "almost" I mean
+that the difference is also there if you are using C<_message_into_response_event()> thus
+either a string or an arrayref will be present in the response event.
+Each element of the returned arrayref will be "spoken" in the
+channel/notice/msg (depending on the type of the request). The <@_> array
+will contain plugin's object as the first element and C<@_[ARG0 .. $#_]>
+will be the rest of the elements.
 
 =head2 C<_make_response_event>
 
     sub _make_response_event {
-        my ( $self, $in_ref ) = @_;
-        $in_ref->{time} = localtime;
-        return $in_ref;
+        my $self = shift;
+        my $in_ref = shift;
+
+        return {
+            ( exists $in_ref->{error}
+                ? ( error => $in_ref->{error} )
+                : ( result => $in_ref->{out} )
+            ),
+
+            map { $_ => $in_ref->{"_$_"} }
+                qw( who channel  message  type ),
+        }
     }
 
-The C<_make_response_event> sub is similar to C<_make_response_message> sub
-except this one defines what the event handler listening to
-C<response_event> (see constructor's documentation in PLUGIN DOCUMENTATION
-section) event will receive, but see also C<_message_into_response_event()>
-below. The call to this sub looks like this basically:
+This sub will be called internally like this:
 
     $self->{irc}->send_event(
-        $self->{response_event} => $self->_make_response_event( $in_ref ),
+        $self->{response_event} =>
+        $self->_make_response_event( @_[ARG0 .. $#_] )
     );
 
-The first element of C<@_> will be the plugin's object and the second
-element will be the same hashref as C<_make_response_message> sub receives.
-See C<_make_response_message> sub above for more information.
+Therefore it must return something that you would like to see in the
+even handler set up to handle C<response_even>. The C<@_> will contain
+plugin's object as the first element and C<@_[ARG0 .. $#_]>
 
 =head2 C<_message_into_response_event>
 
@@ -439,13 +541,25 @@ As an example, the following two snippets are equivalent:
 
     sub _message_into_response_event { 'time' }
 
+=head1 PREREQUISITES
+
+This base class likes to play with the following modules under the hood:
+
+    Carp
+    POE
+    POE::Component::IRC::Plugin
+
+=head1 EXAMPLES
+
+The C<examples/> directory of this distribution contains an example
+plugin written using POE::Component::IRC::Plugin::BasePoCoWrap as well as
+a google page rank bot which uses that plugin.
+
 =head1 PLUGIN DOCUMENTATION
 
-Below is the copy/paste friendly documentation for your plugin (lazy++)
-which describes functionality offered by this base class. The text uses
-word C<EXAMPLE> in the places you need to fill in, but make sure to
-proof read it in full ('cause it's JUST MIGHT HAPPEN that I left a
-nasty surprise for those who are just WAY TOO LAZY ;) )
+This section lists a "default" plugin's documentation which you can
+copy/paste (and EDIT!) into your brand new plugin to describe the
+functionality this base class offers. B<Make sure to proof read> ;)
 
     =head1 SYNOPSIS
 
@@ -481,7 +595,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
         }
 
         sub irc_001 {
-            $irc->yield( join => '#zofbot' );
+            $_[KERNEL]->post( $_[SENDER] => join => '#zofbot' );
         }
 
         <Zoffix_> EXAMPLE, example example
@@ -511,8 +625,8 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
                     auto             => 1,
                     response_event   => 'irc_EXAMPLE',
                     banned           => [ qr/aol\.com$/i ],
-                    root             => [ qr/mah.net$/i ],
                     addressed        => 1,
+                    root             => [ qr/mah.net$/i ],
                     trigger          => qr/^EXAMPLE\s+(?=\S)/i,
                     triggers         => {
                         public  => qr/^EXAMPLE\s+(?=\S)/i,
@@ -533,12 +647,8 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     The C<new()> method constructs and returns a new
     C<POE::Component::IRC::Plugin::EXAMPLE> object suitable to be
     fed to L<POE::Component::IRC>'s C<plugin_add> method. The constructor
-    takes a few arguments, but I<all of them are optional>. B<Note:>
-    you can change the values of the arguments dynamically by accessing
-    them as hashref keys in your plugin's object; e.g. to ban some
-    user during runtime simply do
-    C<< push @{ $your_plugin_object->{banned} }, qr/user!mask/ >>
-    The possible arguments/values are as follows:
+    takes a few arguments, but I<all of them are optional>. The possible
+    arguments/values are as follows:
 
     =head3 C<auto>
 
@@ -555,7 +665,7 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
 
     =head3 C<response_event>
 
-        ->new( response_event => 'event_name_to_receive_results' );
+        ->new( response_event => 'event_name_to_recieve_results' );
 
     B<Optional>. Takes a scalar string specifying the name of the event
     to emit when the results of the request are ready. See EMITED EVENTS
@@ -701,55 +811,46 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
 
     The event handler set up to handle the event, name of which you've
     specified in the C<response_event> argument to the constructor
-    (it defaults to C<irc_EXAMPLE>) will receive input
+    (it defaults to C<irc_EXAMPLE>) will recieve input
     every time request is completed. The input will come in C<$_[ARG0]>
     on a form of a hashref.
     The possible keys/values of that hashrefs are as follows:
 
     =head3 C<EXAMPLE>
 
-    =head3 C<who>
+    =head3 C<_who>
 
-        { 'who' => 'Zoffix!Zoffix@i.love.debian.org', }
+        { '_who' => 'Zoffix!Zoffix@i.love.debian.org', }
 
-    The C<who> key will contain the user mask of the user who sent the request.
+    The C<_who> key will contain the user mask of the user who sent the request.
 
-    =head3 C<what>
+    =head3 C<_what>
 
-        { 'what' => 'EXAMPLE', }
+        { '_what' => 'EXAMPLE', }
 
-    The C<what> key will contain user's message after stripping the C<trigger>
+    The C<_what> key will contain user's message after stripping the C<trigger>
     (see CONSTRUCTOR).
 
-    =head3 C<message>
+    =head3 C<_message>
 
-        { 'message' => 'EXAMPLE' }
+        { '_message' => 'EXAMPLE' }
 
-    The C<message> key will contain the actual message which the user sent; that
+    The C<_message> key will contain the actual message which the user sent; that
     is before the trigger is stripped.
 
-    =head3 C<type>
+    =head3 C<_type>
 
-        { 'type' => 'public', }
+        { '_type' => 'public', }
 
-    The C<type> key will contain the "type" of the message the user have sent.
+    The C<_type> key will contain the "type" of the message the user have sent.
     This will be either C<public>, C<privmsg> or C<notice>.
 
-    =head3 C<channel>
+    =head3 C<_channel>
 
-        { 'channel' => '#zofbot', }
+        { '_channel' => '#zofbot', }
 
-    The C<channel> key will contain the name of the channel where the message
-    originated. This will only make sense if C<type> key contains C<public>.
-
-=head1 EXAMPLES
-
-The C<examples/> directory of this distribution contains an example plugin
-which uses this base class as well as the bot that uses the plugin.
-
-=head1 SEE ALSO
-
-L<POE::Component::IRC::Plugin::BasePoCoWrap>, L<POE::Component::IRC::Plugin>,
+    The C<_channel> key will contain the name of the channel where the message
+    originated. This will only make sense if C<_type> key contains C<public>.
 
 =head1 REPOSITORY
 

@@ -3,6 +3,9 @@
 use strict;
 use warnings;
 
+# VERSION
+
+use lib qw{lib ../lib};
 use POE qw(Component::IRC  Component::IRC::Plugin::Example);
 
 my $irc = POE::Component::IRC->spawn(

@@ -1,41 +1,6 @@
 Revision history for POE-Component-IRC-Plugin-BaseWrap
 
-0.010   2013-11-11
-        - Minor fixes to comply with specs and Kwalitee game   
-
-0.009   2008-10-14
-        - Changed _send_event() to send_event()
-        - Added `response_types`
-
-0.008   2008-10-14
-        - Minor changes to the "Documentation For Your Plugin" section
-          of documentation
-
-0.007   2008-07-26
-	- fixed an issue with META.yml file. No code changes
-
-0.006   2008-07-14
-	- added separate triggers functionality for "public,"
-	  "notice," and "privmsg"
-
-0.005   2008-04-08
-        - fixed documentation to mention that constructor
-          arguments can be changed dynamically.
-
-0.004   2008-03-30
-        - Changed C<_message_into_response_event()> sub so it could add
-          more keys to the C<$in_ref> hashref.
-        - Fixed up the docs a bit
-
-0.003   2008-03-30
-        - <Changes unknown>
-
-0.002   2008-03-30
-        - Added C<_message_into_response_event()> sub
-        - Made it so returning a scalar from
-          C<_make_response_message()> would equate to returning
-          an arrayref with one element.
-
-0.001   2008-03-10
-        - First version, released on an unsuspecting world.
-
+1.001001  2014-02-02
+    - Merged POE::Component::IRC::Plugin::BaseWrap
+        and POE::Component::IRC::Plugin::BasePoCoWrap
+        into a single dist, for easier maintenance

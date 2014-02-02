@@ -1,235 +1,8 @@
-package POE::Component::IRC::Plugin::BaseWrap;
-
-use warnings;
-use strict;
-
-our $VERSION = '1.001001'; # VERSION
-
-use Carp;
-use POE;
-use POE::Component::IRC::Plugin qw(:ALL);
-
-sub new {
-    my $package = shift;
-    croak "Even number of arguments must be specified"
-        if @_ & 1;
-    my %args = @_;
-    $args{ lc $_ } = delete $args{ $_ } for keys %args;
-
-    my $self = bless {}, $package;
-    # fill in the defaults
-    %args = (
-        debug            => 0,
-        auto             => 1,
-        response_event   => 'irc_basewrap',
-        banned           => [],
-        addressed        => 1,
-        eat              => 1,
-        response_types   => {
-            public      => 'public',
-            privmsg     => 'privmsg',
-            notice      => 'notice',
-        },
-        listen_for_input => [ qw(public notice privmsg) ],
-
-        $self->_make_default_args,
-
-        %args,
-    );
-
-    $args{response_types}{public}  ||= 'public';
-    $args{response_types}{privmsg} ||= 'privmsg';
-    $args{response_types}{notice}  ||= 'notice';
-
-    $args{listen_for_input} = {
-        map { $_ => 1 } @{ $args{listen_for_input} || [] }
-    };
-
-    for ( keys %{ $args{triggers} } ) {
-        if ( $_ ne 'public' and $_ ne 'notice' and $_ ne 'privmsg' ) {
-            croak "Invalid key [$_] in {triggers}, must be either"
-                . " 'public', 'privmsg' or 'notice'";
-        }
-    }
-
-    if ( not exists $args{trigger} and ref $args{triggers} ne 'HASH' ) {
-        croak "Neither 'trigger' nor 'triggers' arguments were specified";
-    }
-
-    $self->{ $_ } = delete $args{ $_ } for keys %args;
-
-    return $self;
-}
-
-sub PCI_register {
-    my ( $self, $irc ) = splice @_, 0, 2;
-
-    $self->{irc} = $irc;
-
-    $irc->plugin_register( $self, 'SERVER', qw(public notice msg) );
-
-    return 1;
-}
-
-sub PCI_unregister {
-    my $self = shift;
-
-    delete $self->{irc};
-
-    return 1;
-}
-
-sub S_public {
-    my ( $self, $irc ) = splice @_, 0, 2;
-    my $who     = ${ $_[0] };
-    my $channel = ${ $_[1] }->[0];
-    my $message = ${ $_[2] };
-    return $self->_parse_input( $irc, $who, $channel, $message, 'public' );
-}
-
-sub S_notice {
-    my ( $self, $irc ) = splice @_, 0, 2;
-    my $who     = ${ $_[0] };
-    my $channel = ${ $_[1] }->[0];
-    my $message = ${ $_[2] };
-    return $self->_parse_input( $irc, $who, $channel, $message, 'notice' );
-}
-
-sub S_msg {
-    my ( $self, $irc ) = splice @_, 0, 2;
-    my $who     = ${ $_[0] };
-    my $channel = ${ $_[1] }->[0];
-    my $message = ${ $_[2] };
-    return $self->_parse_input( $irc, $who, $channel, $message, 'privmsg' );
-}
-
-sub _parse_input {
-    my ( $self, $irc, $who, $channel, $message, $type ) = @_;
-
-    warn "Got input: [ who => $who, channel => $channel, "
-            . "mesage => $message ]"
-        if $self->{debug};
-
-    return PCI_EAT_NONE
-        unless exists $self->{listen_for_input}{ $type };
-
-    my $what;
-    if ( $self->{addressed} and $type eq 'public' ) {
-        my $my_nick = $irc->nick_name();
-        ($what) = $message =~ m/^\s*\Q$my_nick\E[\:\,\;\.]?\s*(.*)$/i;
-    }
-    else {
-        $what = $message;
-    }
-
-    return PCI_EAT_NONE
-        unless defined $what;
-
-    return PCI_EAT_NONE
-        unless (
-            ( exists $self->{triggers}{ $type }
-                and $what =~ s/$self->{triggers}{$type}//
-            )
-            or
-            ( exists $self->{trigger} and $what =~ s/$self->{trigger}// )
-    );
-
-    $what =~ s/^\s+|\s+$//g;
-
-    warn "Matched trigger: [ who => $who, channel => $channel, "
-            . "what => $what ]"
-        if $self->{debug};
-
-    if ( exists $self->{root} ) {
-        return PCI_EAT_NONE
-            unless grep { $who =~ /$_/ } @{ $self->{root} || [] };
-    }
-
-    foreach my $ban_re ( @{ $self->{banned} || [] } ) {
-        return PCI_EAT_NONE
-            if $who =~ /$ban_re/;
-    }
-
-    $self->_do_response( {
-            what       => $what,
-            who        => $who,
-            channel    => $channel,
-            message    => $message,
-            type       => $type,
-        }
-    );
-
-    return $self->{eat} ? PCI_EAT_ALL : PCI_EAT_NONE;
-}
-
-sub _do_response {
-    my ( $self, $in_ref ) = @_;
-
-    my $response_message = $self->_make_response_message( $in_ref );
-
-    my $event_response;
-    if ( my $key = $self->_message_into_response_event( $in_ref ) ) {
-        if ( ref $key eq 'ARRAY' ) {
-            $in_ref->{ $key->[0] } = $response_message;
-            %$in_ref = (
-                %$in_ref,
-                %{ $key->[1] },
-            );
-        }
-        else {
-            $in_ref->{ $key } = $response_message;
-        }
-        $event_response = $in_ref;
-    }
-    else {
-        $event_response = $self->_make_response_event( $in_ref );
-    }
-
-    $self->{irc}->send_event(
-        $self->{response_event} => $event_response,
-    );
-
-    if ( $self->{auto} ) {
-        $in_ref->{type} = $self->{response_types}{ $in_ref->{type} };
-
-        my $response_type = $in_ref->{type} eq 'public'
-                        ? 'privmsg'
-                        : $in_ref->{type};
-
-        my $where = $in_ref->{type} eq 'public'
-                ? $in_ref->{channel}
-                : (split /!/, $in_ref->{who})[0];
-
-        for (
-            ref $response_message eq 'ARRAY' ? @$response_message
-            : ( $response_message )
-        ) {
-            $poe_kernel->post( $self->{irc} =>
-                $response_type =>
-                $where =>
-                $_
-            );
-        }
-    }
-
-    undef;
-}
-
-sub _message_into_response_event { undef; }
-
-1;
-
-__END__
-
-=encoding utf8
-
-=for stopwords PoCo bot usermask
-
-=head1 NAME
+# NAME
 
 POE::Component::IRC::Plugin::BaseWrap - base class for IRC plugins which need triggers/ban/root control
 
-=head1 SYNOPSIS
+# SYNOPSIS
 
     package POE::Component::IRC::Plugin::Example;
 
@@ -261,35 +34,36 @@ POE::Component::IRC::Plugin::BaseWrap - base class for IRC plugins which need tr
     __END__
 
 
+
     <Zoffix> TimeBot, time
     <TimeBot> Zoffix, time over here is: Mon Mar 10 18:12:15 2008
 
-=head1 PoCo FLAVOR
+# PoCo FLAVOR
 
-This distribution also contains L<POE::Component::IRC::Plugin::BasePoCoWrap>
-module, for wrapping L<POE::Component> stuff.
+This distribution also contains [POE::Component::IRC::Plugin::BasePoCoWrap](https://metacpan.org/pod/POE::Component::IRC::Plugin::BasePoCoWrap)
+module, for wrapping [POE::Component](https://metacpan.org/pod/POE::Component) stuff.
 
-=head1 DESCRIPTION
+# DESCRIPTION
 
 The module is a base class which provides features such as limiting user
 access to the plugin (banned/root), triggering on matching trigger. The
 module provides listening to requests in public channels as well as /notice
 and /msg messages.
 
-=head1 FORMAT OF THIS DOCUMENT
+# FORMAT OF THIS DOCUMENT
 
 This document contains a section at the end titled "PLUGIN DOCUMENTATION"
 which you can copy/paste into your module when using this base class
-to describe any functionality that this plugin offers. It is B<recommended>
-that you read that documentation B<first> as to know in details the
+to describe any functionality that this plugin offers. It is __recommended__
+that you read that documentation __first__ as to know in details the
 functionality of this base class.
 
 In this document a word "plugin" refers to the POE::Component::IRC::Plugin
 which is to be using this base class.
 
-=head1 SUBS YOU NEED TO/CAN OVERRIDE
+# SUBS YOU NEED TO/CAN OVERRIDE
 
-=head2 C<_make_default_args>
+## `_make_default_args`
 
     sub _make_default_args {
         return (
@@ -298,22 +72,22 @@ which is to be using this base class.
         );
     }
 
-The C<_make_default_args> sub must return a list of key/value pairs which
-represent the default arguments of the plugin's constructor (C<new()>
+The `_make_default_args` sub must return a list of key/value pairs which
+represent the default arguments of the plugin's constructor (`new()`
 method). Whatever you specify here may be overridden by giving
 plugin's constructor same-named arguments. Whatever you specify here
-will be available in C<_make_response_message> and C<_make_response_event>
+will be available in `_make_response_message` and `_make_response_event`
 as a key in plugin's object. In other words, the trigger is available
-as C<$self-E<gt>{trigger}> (C<$self> being passed in C<$_[0]>). Refer
-to L<PLUGIN DOCUMENTATION> section for information on which arguments
+as `$self->{trigger}` (`$self` being passed in `$_[0]`). Refer
+to ["PLUGIN DOCUMENTATION"](#plugin-documentation) section for information on which arguments
 are provided by default (as well as their default values). Exception
-being the C<response_event> argument default is C<irc_basewrap> and
-C<trigger> argument's default is C<qr/^basewrap\s+(?=\S)/i>
+being the `response_event` argument default is `irc_basewrap` and
+`trigger` argument's default is `qr/^basewrap\s+(?=\S)/i`
 
-B<Note:> user is able to change this arguments on the fly by accessing
+__Note:__ user is able to change this arguments on the fly by accessing
 them as hashref keys in plugin's object.
 
-=head2 C<_make_response_message>
+## `_make_response_message`
 
     sub _make_response_message {
         my ( $self, $in_ref ) = @_;
@@ -321,12 +95,12 @@ them as hashref keys in plugin's object.
         return "$nick, time over here is: " . scalar localtime;
     }
 
-The C<_make_response_message> sub must return either a scalar or an
+The `_make_response_message` sub must return either a scalar or an
 arrayref. If an arrayref is returned each element
-of that arrayref will be "spoken" by the plugin if C<auto> argument to
+of that arrayref will be "spoken" by the plugin if `auto` argument to
 the constructor is set to a true value. Returning is scalar is equivalent
 to returning an arrayref with only one element.
-The C<@_> will contain plugin's
+The `@_` will contain plugin's
 object as the first element (constructor's arguments, anyone?) and the
 second element will contain a hashref, keys/values of which are as follows:
 
@@ -338,39 +112,39 @@ second element will contain a hashref, keys/values of which are as follows:
         'message' => 'TimeBot, time'
     };
 
-=head3 who
+### who
 
     { 'who' => 'Zoffix!n=Zoffix@unaffiliated/zoffix' }
 
 The usermask of the person who made the request.
 
-=head3 what
+### what
 
     { 'what' => 'time' }
 
 The user's message after stripping the trigger.
 
-=head3 type
+### type
 
     { 'type' => 'public' }
 
-The type of the request. This will be either C<public>, C<notice> or
-C<privmsg>
+The type of the request. This will be either `public`, `notice` or
+`privmsg`
 
-=head3 channel
+### channel
 
     { 'channel' => '#zofbot' }
 
 The channel where the message came from (this will only make sense when
 the request came from a public channel as opposed to /notice or /msg)
 
-=head3 message
+### message
 
     { 'message' => 'TimeBot, time' }
 
 The full message that the user has sent.
 
-=head2 C<_make_response_event>
+## `_make_response_event`
 
     sub _make_response_event {
         my ( $self, $in_ref ) = @_;
@@ -378,46 +152,46 @@ The full message that the user has sent.
         return $in_ref;
     }
 
-The C<_make_response_event> sub is similar to C<_make_response_message> sub
+The `_make_response_event` sub is similar to `_make_response_message` sub
 except this one defines what the event handler listening to
-C<response_event> (see constructor's documentation in PLUGIN DOCUMENTATION
-section) event will receive, but see also C<_message_into_response_event()>
+`response_event` (see constructor's documentation in PLUGIN DOCUMENTATION
+section) event will receive, but see also `_message_into_response_event()`
 below. The call to this sub looks like this basically:
 
     $self->{irc}->send_event(
         $self->{response_event} => $self->_make_response_event( $in_ref ),
     );
 
-The first element of C<@_> will be the plugin's object and the second
-element will be the same hashref as C<_make_response_message> sub receives.
-See C<_make_response_message> sub above for more information.
+The first element of `@_` will be the plugin's object and the second
+element will be the same hashref as `_make_response_message` sub receives.
+See `_make_response_message` sub above for more information.
 
-=head2 C<_message_into_response_event>
+## `_message_into_response_event`
 
     sub _message_into_response_event { 'name_of_key'; }
 
 While using previous version of this module I often found myself wishing
-to put the return value of C<_make_response_message()> as a certain key
-in C<$in_ref> of C<_make_response_event()> sub.. and didn't want to do
+to put the return value of `_make_response_message()` as a certain key
+in `$in_ref` of `_make_response_event()` sub.. and didn't want to do
 whatever the plugin would be doing twice. Now this can be easily done.
 
-The C<_message_into_response_event> sub must return a true value which
+The `_message_into_response_event` sub must return a true value which
 will be the name of the key which will contain the return value of
-C<_make_response_message()> sub and stuffed into C<$in_ref> hashref of
-the C<_make_response_event()> sub. Basically, if you are defining
-C<_message_into_response_event()> sub you should not define
-C<_make_response_message()> sub as it will never be called.
+`_make_response_message()` sub and stuffed into `$in_ref` hashref of
+the `_make_response_event()` sub. Basically, if you are defining
+`_message_into_response_event()` sub you should not define
+`_make_response_message()` sub as it will never be called.
 
-If along with the return value of C<_make_response_message()> you also
-want to add some extra keys into the C<$in_ref> you can return an
-I<arrayref> from C<_message_into_response_event()> sub with two elements.
+If along with the return value of `_make_response_message()` you also
+want to add some extra keys into the `$in_ref` you can return an
+_arrayref_ from `_message_into_response_event()` sub with two elements.
 The first element of that arrayref would be the name of the key into
-which to stick the return value of C<_make_response_message()>. The second
-element must be a I<hashref> with extra keys/values which will be
-set in the C<$in_ref>; note that you can override original keys from here.
+which to stick the return value of `_make_response_message()`. The second
+element must be a _hashref_ with extra keys/values which will be
+set in the `$in_ref`; note that you can override original keys from here.
 
-The C<@_> will contain your plugin's object as the first element and
-C<$in_ref> as a second element ( see C<_make_response_event()> )
+The `@_` will contain your plugin's object as the first element and
+`$in_ref` as a second element ( see `_make_response_event()` )
 
 As an example, the following two snippets are equivalent:
 
@@ -439,11 +213,11 @@ As an example, the following two snippets are equivalent:
 
     sub _message_into_response_event { 'time' }
 
-=head1 PLUGIN DOCUMENTATION
+# PLUGIN DOCUMENTATION
 
 Below is the copy/paste friendly documentation for your plugin (lazy++)
 which describes functionality offered by this base class. The text uses
-word C<EXAMPLE> in the places you need to fill in, but make sure to
+word `EXAMPLE` in the places you need to fill in, but make sure to
 proof read it in full ('cause it's JUST MIGHT HAPPEN that I left a
 nasty surprise for those who are just WAY TOO LAZY ;) )
 
@@ -742,37 +516,35 @@ nasty surprise for those who are just WAY TOO LAZY ;) )
     The C<channel> key will contain the name of the channel where the message
     originated. This will only make sense if C<type> key contains C<public>.
 
-=head1 EXAMPLES
+# EXAMPLES
 
-The C<examples/> directory of this distribution contains an example plugin
+The `examples/` directory of this distribution contains an example plugin
 which uses this base class as well as the bot that uses the plugin.
 
-=head1 SEE ALSO
+# SEE ALSO
 
-L<POE::Component::IRC::Plugin::BasePoCoWrap>, L<POE::Component::IRC::Plugin>,
+[POE::Component::IRC::Plugin::BasePoCoWrap](https://metacpan.org/pod/POE::Component::IRC::Plugin::BasePoCoWrap), [POE::Component::IRC::Plugin](https://metacpan.org/pod/POE::Component::IRC::Plugin),
 
-=head1 REPOSITORY
+# REPOSITORY
 
 Fork this module on GitHub:
-L<https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap>
+[https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap](https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap)
 
-=head1 BUGS
+# BUGS
 
 To report bugs or request features, please use
-L<https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap/issues>
+[https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap/issues](https://github.com/zoffixznet/POE-Component-IRC-Plugin-BaseWrap/issues)
 
 If you can't access GitHub, you can email your request
-to C<bug-POE-Component-IRC-Plugin-BaseWrap at rt.cpan.org>
+to `bug-POE-Component-IRC-Plugin-BaseWrap at rt.cpan.org`
 
-=head1 AUTHOR
+# AUTHOR
 
 Zoffix Znet <zoffix at cpan.org>
-(L<http://zoffix.com/>, L<http://haslayout.net/>)
+([http://zoffix.com/](http://zoffix.com/), [http://haslayout.net/](http://haslayout.net/))
 
-=head1 LICENSE
+# LICENSE
 
 You can use and distribute this module under the same terms as Perl itself.
-See the C<LICENSE> file included in this distribution for complete
+See the `LICENSE` file included in this distribution for complete
 details.
-
-=cut
